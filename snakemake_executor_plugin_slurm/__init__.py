@@ -199,7 +199,7 @@ class Executor(RemoteExecutor):
         # with job_info being of type
         # snakemake_interface_executor_plugins.executors.base.SubmittedJobInfo.
 
-        group_or_rule = f"group_{job.name}" if job.is_group() else f"rule_{job.name}"
+        group_or_rule = f"group_{job.name}" if job.is_group() else f"{job.name}"
 
         try:
             wildcard_str = (
@@ -209,7 +209,7 @@ class Executor(RemoteExecutor):
             wildcard_str = ""
 
         self.slurm_logdir.mkdir(parents=True, exist_ok=True)
-        slurm_logfile = self.slurm_logdir / group_or_rule / wildcard_str / "%j.log"
+        slurm_logfile = self.slurm_logdir / group_or_rule / "%j.log"
         slurm_logfile.parent.mkdir(parents=True, exist_ok=True)
         # this behavior has been fixed in slurm 23.02, but there might be plenty of
         # older versions around, hence we should rather be conservative here.
