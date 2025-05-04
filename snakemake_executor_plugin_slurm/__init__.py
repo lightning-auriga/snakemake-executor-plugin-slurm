@@ -363,7 +363,7 @@ class Executor(RemoteExecutor):
         missing_squeue_status = set()
 
         squeue_command = f"""squeue \
-                          -o "%i|%T" \
+                          -o '%i|%T' \
                           --noheader \
                           -n {self.run_uuid}"""
 
