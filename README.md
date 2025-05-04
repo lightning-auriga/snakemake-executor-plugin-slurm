@@ -54,6 +54,14 @@ slurm-account: "ec2-user"
 ## other default settings for snakemake can be optionally included below.
 ```
 
+- Invoke snakemake as:
+
+```bash
+snakemake --profile /path/to/profile/dir [...]
+```
+
+
+
 The logic for most of the above settings is available at [the upstream plugin's catalog page](https://snakemake.github.io/snakemake-plugin-catalog/plugins/executor/slurm.html).
 Note that I have modded the final setting. It used to be `--slurm-no-account` and expect a boolean; I've changed this to `slurm-account` and it now expects a string
 representing the slurm username that should be attached to your submitted jobs. For default parallelcluster builds, `ec2-user` is the correct setting here.
