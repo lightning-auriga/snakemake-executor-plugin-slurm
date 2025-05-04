@@ -97,13 +97,12 @@ class ExecutorSettings(ExecutorSettingsBase):
             "required": False,
         },
     )
-    no_account: bool = field(
-        default=False,
+    account: str = field(
+        default="ec2-user",
         metadata={
-            "help": "Do not use any account for submission. "
-            "This flag has no effect, if not set.",
+            "help": "Account to use for job submission.",
             "env_var": False,
-            "required": False,
+            "required": True,
         },
     )
 
@@ -149,6 +148,7 @@ class Executor(RemoteExecutor):
             if self.workflow.executor_settings.logdir
             else Path(".snakemake/slurm_logs").resolve()
         )
+        self.slurm_account = str(self.workflow.executor_settings.account)
         atexit.register(self.clean_old_logs)
 
     def clean_old_logs(self) -> None:
@@ -235,7 +235,7 @@ class Executor(RemoteExecutor):
             "run_uuid": self.run_uuid,
             "slurm_logfile": slurm_logfile,
             "comment_str": comment_str,
-            "account": self.get_account_arg(job),
+            "account": self.slurm_account,
             "partition": self.get_partition_arg(job),
             "workdir": self.workflow.workdir_init,
         }
@@ -356,15 +356,9 @@ class Executor(RemoteExecutor):
             "ERROR",
         )
         # Cap sleeping time between querying the status of all active jobs:
-        # If `AccountingStorageType`` for `sacct` is set to `accounting_storage/none`,
-        # sacct will query `slurmctld` (instead of `slurmdbd`) and this in turn can
-        # rely on default config, see: https://stackoverflow.com/a/46667605
-        # This config defaults to `MinJobAge=300`, which implies that jobs will be
-        # removed from `slurmctld` within 6 minutes of finishing. So we're conservative
-        # here, with half that time
         max_sleep_time = 180
 
-        sacct_query_durations = []
+        squeue_query_durations = []
 
         status_attempts = self.workflow.executor_settings.status_attempts
         self.logger.debug(
@@ -373,88 +367,77 @@ class Executor(RemoteExecutor):
         )
 
         active_jobs_ids = {job_info.external_jobid for job_info in active_jobs}
-        active_jobs_seen_by_sacct = set()
-        missing_sacct_status = set()
+        active_jobs_seen_by_squeue = set()
+        missing_squeue_status = set()
 
-        # We use this sacct syntax for argument 'starttime' to keep it compatible
-        # with slurm < 20.11
-        sacct_starttime = f"{datetime.now() - timedelta(days = 2):%Y-%m-%dT%H:00}"
-        # previously we had
-        # f"--starttime now-2days --endtime now --name {self.run_uuid}"
-        # in line 218 - once v20.11 is definitively not in use any more,
-        # the more readable version ought to be re-adapted
+        squeue_command = f"""squeue \
+                          -o "%i|%T" \
+                          --noheader \
+                          -j {self.run_uuid}"""
 
-        # -X: only show main job, no substeps
-        sacct_command = f"""sacct -X --parsable2 \
-                        --clusters all \
-                        --noheader --format=JobIdRaw,State \
-                        --starttime {sacct_starttime} \
-                        --endtime now --name {self.run_uuid}"""
-
-        # for better redability in verbose output
-        sacct_command = " ".join(shlex.split(sacct_command))
+        # for better readability in verbose output
+        squeue_command = " ".join(shlex.split(squeue_command))
 
         # this code is inspired by the snakemake profile:
         # https://github.com/Snakemake-Profiles/slurm
         for i in range(status_attempts):
             async with self.status_rate_limiter:
-                (status_of_jobs, sacct_query_duration) = await self.job_stati(
-                    sacct_command
+                (status_of_jobs, squeue_query_duration) = await self.job_stati(
+                    squeue_command
                 )
-                if status_of_jobs is None and sacct_query_duration is None:
+                if status_of_jobs is None and squeue_query_duration is None:
                     self.logger.debug(f"could not check status of job {self.run_uuid}")
                     continue
-                sacct_query_durations.append(sacct_query_duration)
-                self.logger.debug(f"status_of_jobs after sacct is: {status_of_jobs}")
+                squeue_query_durations.append(squeue_query_duration)
+                self.logger.debug(f"status_of_jobs after squeue is: {status_of_jobs}")
                 # only take jobs that are still active
-                active_jobs_ids_with_current_sacct_status = (
+                active_jobs_ids_with_current_squeue_status = (
                     set(status_of_jobs.keys()) & active_jobs_ids
                 )
                 self.logger.debug(
-                    f"active_jobs_ids_with_current_sacct_status are: "
-                    f"{active_jobs_ids_with_current_sacct_status}"
+                    f"active_jobs_ids_with_current_squeue_status are: "
+                    f"{active_jobs_ids_with_current_squeue_status}"
                 )
-                active_jobs_seen_by_sacct = (
-                    active_jobs_seen_by_sacct
-                    | active_jobs_ids_with_current_sacct_status
+                active_jobs_seen_by_squeue = (
+                    active_jobs_seen_by_squeue
+                    | active_jobs_ids_with_current_squeue_status
                 )
                 self.logger.debug(
-                    f"active_jobs_seen_by_sacct are: {active_jobs_seen_by_sacct}"
+                    f"active_jobs_seen_by_squeue are: {active_jobs_seen_by_squeue}"
                 )
-                missing_sacct_status = (
-                    active_jobs_seen_by_sacct
-                    - active_jobs_ids_with_current_sacct_status
+                missing_squeue_status = (
+                    active_jobs_seen_by_squeue
+                    - active_jobs_ids_with_current_squeue_status
                 )
-                self.logger.debug(f"missing_sacct_status are: {missing_sacct_status}")
-                if not missing_sacct_status:
+                self.logger.debug(f"missing_squeue_status are: {missing_squeue_status}")
+                if not missing_queue_status:
                     break
 
-        if missing_sacct_status:
+        if missing_squeue_status:
             self.logger.warning(
                 f"Unable to get the status of all active jobs that should be "
-                f"in slurmdbd, even after {status_attempts} attempts.\n"
+                f"in squeue, even after {status_attempts} attempts.\n"
                 f"The jobs with the following slurm job ids were previously seen "
-                "by sacct, but sacct doesn't report them any more:\n"
-                f"{missing_sacct_status}\n"
-                f"Please double-check with your slurm cluster administrator, that "
-                "slurmdbd job accounting is properly set up.\n"
+                "by squeue, but squeue doesn't report them any more:\n"
+                f"{missing_squeue_status}\n"
+                f"Good luck with that lol.\n"
             )
 
         if status_of_jobs is not None:
             any_finished = False
             for j in active_jobs:
                 # the job probably didn't make it into slurmdbd yet, so
-                # `sacct` doesn't return it
+                # `squeue` doesn't return it
                 if j.external_jobid not in status_of_jobs:
                     # but the job should still be queueing or running and
-                    # appear in slurmdbd (and thus `sacct` output) later
+                    # appear in slurmdbd (and thus `squeue` output) later
                     yield j
                     continue
                 status = status_of_jobs[j.external_jobid]
                 if status == "COMPLETED":
                     self.report_job_success(j)
                     any_finished = True
-                    active_jobs_seen_by_sacct.remove(j.external_jobid)
+                    active_jobs_seen_by_squeue.remove(j.external_jobid)
                     if not self.workflow.executor_settings.keep_successful_logs:
                         self.logger.debug(
                             "removing log for successful job "
@@ -480,11 +463,11 @@ We leave it to SLURM to resume your job(s)"""
                     )
                     yield j
                 elif status == "UNKNOWN":
-                    # the job probably does not exist anymore, but 'sacct' did not work
+                    # the job probably does not exist anymore, but 'squeue' did not work
                     # so we assume it is finished
                     self.report_job_success(j)
                     any_finished = True
-                    active_jobs_seen_by_sacct.remove(j.external_jobid)
+                    active_jobs_seen_by_squeue.remove(j.external_jobid)
                 elif status in fail_stati:
                     msg = (
                         f"SLURM-job '{j.external_jobid}' failed, SLURM status is: "
@@ -495,7 +478,7 @@ We leave it to SLURM to resume your job(s)"""
                     self.report_job_error(
                         j, msg=msg, aux_logs=[j.aux["slurm_logfile"]._str]
                     )
-                    active_jobs_seen_by_sacct.remove(j.external_jobid)
+                    active_jobs_seen_by_squeue.remove(j.external_jobid)
                 else:  # still running?
                     yield j
 
@@ -517,7 +500,7 @@ We leave it to SLURM to resume your job(s)"""
                 # about 30 sec, but can be longer in extreme cases.
                 # Under 'normal' circumstances, 'scancel' is executed in
                 # virtually no time.
-                scancel_command = f"scancel {jobids} --clusters=all"
+                scancel_command = f"scancel {jobids}"
 
                 subprocess.check_output(
                     scancel_command,
@@ -538,7 +521,7 @@ We leave it to SLURM to resume your job(s)"""
                 ) from e
 
     async def job_stati(self, command):
-        """Obtain SLURM job status of all submitted jobs with sacct
+        """Obtain SLURM job status of all submitted jobs with squeue
 
         Keyword arguments:
         command -- a slurm command that returns one line for each job with:
@@ -584,34 +567,6 @@ We leave it to SLURM to resume your job(s)"""
 
         return (res, query_duration)
 
-    def get_account_arg(self, job: JobExecutorInterface):
-        """
-        checks whether the desired account is valid,
-        returns a default account, if applicable
-        else raises an error - implicetly.
-        """
-        if job.resources.get("slurm_account"):
-            # here, we check whether the given or guessed account is valid
-            # if not, a WorkflowError is raised
-            self.test_account(job.resources.slurm_account)
-            return f" -A '{job.resources.slurm_account}'"
-        else:
-            if self._fallback_account_arg is None:
-                self.logger.warning("No SLURM account given, trying to guess.")
-                account = self.get_account()
-                if account:
-                    self.logger.warning(f"Guessed SLURM account: {account}")
-                    self.test_account(f"{account}")
-                    self._fallback_account_arg = f" -A {account}"
-                else:
-                    self.logger.warning(
-                        "Unable to guess SLURM account. Trying to proceed without."
-                    )
-                    self._fallback_account_arg = (
-                        ""  # no account specific args for sbatch
-                    )
-            return self._fallback_account_arg
-
     def get_partition_arg(self, job: JobExecutorInterface):
         """
         checks whether the desired partition is valid,
@@ -628,75 +583,6 @@ We leave it to SLURM to resume your job(s)"""
             return f" -p {partition}"
         else:
             return ""
-
-    def get_account(self):
-        """
-        tries to deduce the acccount from recent jobs,
-        returns None, if none is found
-        """
-        cmd = f'sacct -nu "{os.environ["USER"]}" -o Account%256 | tail -1'
-        try:
-            sacct_out = subprocess.check_output(
-                cmd, shell=True, text=True, stderr=subprocess.PIPE
-            )
-            possible_account = sacct_out.replace("(null)", "").strip()
-            if possible_account == "none":  # some clusters may not use an account
-                return None
-        except subprocess.CalledProcessError as e:
-            self.logger.warning(
-                f"No account was given, not able to get a SLURM account via sacct: "
-                f"{e.stderr}"
-            )
-            return None
-
-    def test_account(self, account):
-        """
-        tests whether the given account is registered, raises an error, if not
-        """
-        cmd = "sshare -U --format Account --noheader"
-        try:
-            accounts = subprocess.check_output(
-                cmd, shell=True, text=True, stderr=subprocess.PIPE
-            )
-        except subprocess.CalledProcessError as e:
-            sshare_report = (
-                "Unable to test the validity of the given or guessed"
-                f" SLURM account '{account}' with sshare: {e.stderr}."
-            )
-            accounts = ""
-
-        if not accounts.strip():
-            cmd = f'sacctmgr -n -s list user "{os.environ["USER"]}" format=account%256'
-            try:
-                accounts = subprocess.check_output(
-                    cmd, shell=True, text=True, stderr=subprocess.PIPE
-                )
-            except subprocess.CalledProcessError as e:
-                sacctmgr_report = (
-                    "Unable to test the validity of the given or guessed "
-                    f"SLURM account '{account}' with sacctmgr: {e.stderr}."
-                )
-                raise WorkflowError(
-                    f"The 'sshare' reported: '{sshare_report}' "
-                    f"and likewise 'sacctmgr' reported: '{sacctmgr_report}'."
-                )
-
-        # The set() has been introduced during review to eliminate
-        # duplicates. They are not harmful, but disturbing to read.
-        accounts = set(_.strip() for _ in accounts.split("\n") if _)
-
-        if not accounts:
-            self.logger.warning(
-                f"Both 'sshare' and 'sacctmgr' returned empty results for account "
-                f"'{account}'. Proceeding without account validation."
-            )
-            return ""
-
-        if account.lower() not in accounts:
-            raise WorkflowError(
-                f"The given account {account} appears to be invalid. Available "
-                f"accounts:\n{', '.join(accounts)}"
-            )
 
     def get_default_partition(self, job):
         """
