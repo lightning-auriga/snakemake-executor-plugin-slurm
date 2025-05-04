@@ -365,6 +365,7 @@ class Executor(RemoteExecutor):
         job_list=",".join(active_jobs_ids)
         squeue_command = f"""squeue \
                           -o %all \
+                          -t all \
                           -j {job_list} \
                           --noheader"""
 
