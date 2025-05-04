@@ -247,14 +247,6 @@ class Executor(RemoteExecutor):
 
         call += set_gres_string(job)
 
-        if not job.resources.get("runtime"):
-            self.logger.warning(
-                "No wall time information given. This might or might not "
-                "work on your cluster. "
-                "If not, specify the resource runtime in your rule or as a reasonable "
-                "default via --default-resources."
-            )
-
         if not job.resources.get("mem_mb_per_cpu") and not job.resources.get("mem_mb"):
             self.logger.warning(
                 "No job memory information ('mem_mb' or 'mem_mb_per_cpu') is given "
@@ -373,7 +365,7 @@ class Executor(RemoteExecutor):
         squeue_command = f"""squeue \
                           -o "%i|%T" \
                           --noheader \
-                          -j {self.run_uuid}"""
+                          -n {self.run_uuid}"""
 
         # for better readability in verbose output
         squeue_command = " ".join(shlex.split(squeue_command))
