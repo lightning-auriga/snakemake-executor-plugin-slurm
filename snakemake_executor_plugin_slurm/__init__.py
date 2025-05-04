@@ -363,8 +363,9 @@ class Executor(RemoteExecutor):
         missing_squeue_status = set()
 
         squeue_command = f"""squeue \
-                          -o '%i|%T' \
+                          -o %all \
                           --noheader \
+                          --only-job-state \
                           -n {self.run_uuid}"""
 
         # for better readability in verbose output
@@ -535,7 +536,7 @@ We leave it to SLURM to resume your job(s)"""
                 # We split the second field in the output, as the State field
                 # could contain info beyond the JOB STATE CODE according to:
                 # https://slurm.schedmd.com/sacct.html#OPT_State
-                entry[0]: entry[1].split(sep=None, maxsplit=1)[0]
+                entry[8]: entry[44].split(sep=None, maxsplit=1)[0]
                 for entry in csv.reader(StringIO(command_res), delimiter="|")
             }
         except subprocess.CalledProcessError as e:
