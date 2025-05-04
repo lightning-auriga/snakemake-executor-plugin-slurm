@@ -232,7 +232,7 @@ class Executor(RemoteExecutor):
             self.check_slurm_extra(job)
 
         job_params = {
-            "run_uuid": self.run_uuid,
+            "run_uuid": f'{job.name}-{self.run_uuid}',
             "slurm_logfile": slurm_logfile,
             "comment_str": comment_str,
             "account": self.slurm_account,
@@ -362,11 +362,11 @@ class Executor(RemoteExecutor):
         active_jobs_seen_by_squeue = set()
         missing_squeue_status = set()
 
+        job_list=",".join(active_jobs_ids)
         squeue_command = f"""squeue \
                           -o %all \
-                          --noheader \
-                          --only-job-state \
-                          -n {self.run_uuid}"""
+                          -j {job_list} \
+                          --noheader"""
 
         # for better readability in verbose output
         squeue_command = " ".join(shlex.split(squeue_command))
@@ -541,7 +541,9 @@ We leave it to SLURM to resume your job(s)"""
             }
         except subprocess.CalledProcessError as e:
             error_message = e.stderr.strip()
-            if "slurm_persist_conn_open_without_init" in error_message:
+            if "slurm_load_jobs error" in error_message:
+                pass
+            elif "slurm_persist_conn_open_without_init" in error_message:
                 self.logger.warning(
                     "The SLURM database might not be available ... "
                     f"Error message: '{error_message}'"
