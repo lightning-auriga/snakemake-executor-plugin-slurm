@@ -21,9 +21,7 @@ def get_submit_command(job, params):
     # No accout or partition checking is required, here.
     # Checking is done in the submit function.
 
-    # here, only the string is used, as it already contains
-    # '-A {account_name}'
-    call += f" {params.account}"
+    call += f" -A {params.account}"
     # here, only the string is used, as it already contains
     # '- p {partition_name}'
     call += f" {params.partition}"
