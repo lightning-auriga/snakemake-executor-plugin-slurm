@@ -403,7 +403,7 @@ class Executor(RemoteExecutor):
                     - active_jobs_ids_with_current_squeue_status
                 )
                 self.logger.debug(f"missing_squeue_status are: {missing_squeue_status}")
-                if not missing_queue_status:
+                if not missing_squeue_status:
                     break
 
         if missing_squeue_status:
