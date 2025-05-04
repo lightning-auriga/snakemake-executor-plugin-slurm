@@ -367,6 +367,7 @@ class Executor(RemoteExecutor):
                           -o %all \
                           -t all \
                           -j {job_list} \
+                          --only-job-state \
                           --noheader"""
 
         # for better readability in verbose output
